@@ -1,0 +1,238 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Dec 18 08:33:28 2023
+
+@author: VuralBayraklii
+"""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import random
+import os
+
+
+class BahdanauEncoder(nn.Module):
+    def __init__(self, input_dim, embedding_dim, encoder_hidden_dim, 
+                 decoder_hidden_dim, dropout_p):
+        super().__init__()
+        self.input_dim = input_dim
+        self.embedding_dim = embedding_dim
+        self.encoder_hidden_dim = encoder_hidden_dim
+        self.decoder_hidden_dim = decoder_hidden_dim
+        self.dropout_p = dropout_p
+
+        self.embedding = nn.Embedding(input_dim, embedding_dim)
+        self.gru = nn.GRU(embedding_dim, encoder_hidden_dim, bidirectional=True)
+        self.linear = nn.Linear(encoder_hidden_dim * 2, decoder_hidden_dim)
+        self.dropout = nn.Dropout(dropout_p)
+
+    def forward(self, x):
+        '''
+        Encode a source sentence. 
+
+        Input:
+          - x: a (sequence length, batch size) tensor of token IDs in source language
+
+        Output:
+          - outputs: encoder outputs at each time step, given as a tensor of size
+            (sequence length, batch size, encoder hidden dim * 2)
+          - hidden: final hidden state from RNN, with directions concatenated and
+            fed through linear layer; tensor of size (batch size, decoder hidden dim)
+        '''
+
+        embedded = self.dropout(self.embedding(x))
+        outputs, hidden = self.gru(embedded)
+
+        hidden = torch.tanh(self.linear(
+            torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
+        ))
+
+        return outputs, hidden
+
+class BahdanauAttentionQKV(nn.Module):
+    def __init__(self, hidden_size, query_size=None, key_size=None, dropout_p=0.15):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.query_size = hidden_size if query_size is None else query_size
+        
+        # assume bidirectional encoder, but can specify otherwise
+        self.key_size = 2*hidden_size if key_size is None else key_size
+        
+        self.query_layer = nn.Linear(self.query_size, hidden_size)
+        self.key_layer = nn.Linear(self.key_size, hidden_size)
+        self.energy_layer = nn.Linear(hidden_size, 1)
+        self.dropout = nn.Dropout(dropout_p)
+        
+    def forward(self, hidden, encoder_outputs, src_mask=None):
+        '''
+        Calculate attention weights using query and key features, with
+        an optional mask for input sequences.
+        
+        Inputs:
+          - hidden: most recent RNN hidden state; (B, Dec)
+          - encoder_outputs: RNN outputs at individual time steps with 
+            directions concatenated; (L, B, 2*Enc)
+          - src_mask: boolean tensor of same size as source tokens (Src, B) 
+            where False denotes tokens to be ignored
+            
+        Outputs:
+          - attention weights: (B, src) tensor of softmax attention 
+            weights to be applied to downstream values
+        '''
+        
+        # (B, H)
+        query_out = self.query_layer(hidden) 
+        
+        # (Src, B, 2*H) --> (Src, B, H)
+        key_out = self.key_layer(encoder_outputs) 
+        
+        # (B, H) + (Src, B, H) = (Src, B, H)
+        energy_input = torch.tanh(query_out + key_out) 
+        
+        # (Src, B, H) --> (Src, B, 1) --> (Src, B)
+        energies = self.energy_layer(energy_input).squeeze(2) 
+        
+        # if a mask is provided, remove masked tokens from softmax calc
+        if src_mask is not None:
+            energies.data.masked_fill_(src_mask == 0, float("-inf"))
+        
+        # softmax over the length dimension
+        weights = F.softmax(energies, dim=0)
+        
+        # return as (B, Src) as expected by later multiplication
+        return weights.transpose(0, 1)
+
+class BahdanauDecoder(nn.Module):
+    def __init__(self, output_dim, embedding_dim, encoder_hidden_dim, 
+                 decoder_hidden_dim, attention, dropout_p):
+        super().__init__()
+
+        self.embedding_dim = embedding_dim 
+        self.output_dim = output_dim 
+        self.encoder_hidden_dim = encoder_hidden_dim
+        self.decoder_hidden_dim = decoder_hidden_dim
+        self.dropout_p = dropout_p 
+
+        self.embedding = nn.Embedding(output_dim, embedding_dim)
+        self.attention = attention # allowing for custom attention
+        self.gru = nn.GRU((encoder_hidden_dim * 2) + embedding_dim, 
+                          decoder_hidden_dim)
+        self.out = nn.Linear((encoder_hidden_dim * 2) + embedding_dim + decoder_hidden_dim,
+                             output_dim)
+        self.dropout = nn.Dropout(dropout_p)
+
+    def forward(self, input, hidden, encoder_outputs, src_mask=None):
+        '''
+        Decode an encoder's output. 
+
+        B: batch size
+        S: source sentence length
+        T: target sentence length
+        O: output size (target vocab size)
+        Enc: encoder hidden dim
+        Dec: decoder hidden dim
+        Emb: embedding dim
+
+        Inputs:
+          - input: a vector of length B giving the most recent decoded token
+          - hidden: a (B, Dec) most recent RNN hidden state
+          - encoder_outputs: (S, B, 2*Enc) sequence of outputs from encoder RNN
+
+        Outputs:
+          - output: logits for next token in the sequence (B, O)
+          - hidden: a new (B, Dec) RNN hidden state
+          - attentions: (B, S) attention weights for the current token over the source sentence
+        '''
+
+        # (B) --> (1, B)
+        input = input.unsqueeze(0)
+
+        embedded = self.dropout(self.embedding(input))
+
+        attentions = self.attention(hidden, encoder_outputs, src_mask)
+
+        # (B, S) --> (B, 1, S)
+        a = attentions.unsqueeze(1)
+
+        # (S, B, 2*Enc) --> (B, S, 2*Enc)
+        encoder_outputs = encoder_outputs.transpose(0, 1)
+
+        # weighted encoder representation
+        # (B, 1, S) @ (B, S, 2*Enc) = (B, 1, 2*Enc)
+        weighted = torch.bmm(a, encoder_outputs)
+
+        # (B, 1, 2*Enc) --> (1, B, 2*Enc)
+        weighted = weighted.transpose(0, 1)
+
+        # concat (1, B, Emb) and (1, B, 2*Enc)
+        # results in (1, B, Emb + 2*Enc)
+        rnn_input = torch.cat((embedded, weighted), dim=2)
+
+        output, hidden = self.gru(rnn_input, hidden.unsqueeze(0))
+
+        assert (output == hidden).all()
+
+        # get rid of empty leading dimensions
+        embedded = embedded.squeeze(0)
+        output = output.squeeze(0)
+        weighted = weighted.squeeze(0)
+
+        # concatenate the pieces above
+        # (B, Dec), (B, 2*Enc), and (B, Emb)
+        # result is (B, Dec + 2*Enc + Emb)
+        linear_input = torch.cat((output, weighted, embedded), dim=1)
+
+        # (B, Dec + 2*Enc + Emb) --> (B, O)
+        output = self.out(linear_input)
+
+        return output, hidden.squeeze(0), attentions
+
+class BahdanauSeq2Seq(nn.Module):
+    def __init__(self, encoder, decoder, device):
+        super().__init__()
+
+        self.encoder = encoder.to(device)
+        self.decoder = decoder.to(device)
+        self.device = device
+        self.tgt_vocab_size = decoder.output_dim
+
+    def forward(self, src, tgt, src_mask=None, teacher_forcing_ratio=0.5, return_attentions=False):
+
+        tgt_length, batch_size = tgt.shape
+
+        # store decoder outputs
+        outputs = torch.zeros(tgt_length, batch_size, self.tgt_vocab_size).to(self.device)
+        # attentions = torch.zeros(tgt_length, batch_size, )
+
+        encoder_outputs, hidden = self.encoder(src)
+        hidden = hidden.squeeze(1) # B, 1, Enc --> B, Enc (if necessary)
+
+        # start with <bos> as the decoder input
+        decoder_input = tgt[0, :]
+        attentions = []
+
+        for t in range(1, tgt_length):
+            decoder_output, hidden, attention = self.decoder(decoder_input, hidden, encoder_outputs, src_mask)
+            outputs[t] = decoder_output
+            teacher_force = random.random() < teacher_forcing_ratio
+            top_token = decoder_output.max(1)[1]
+            decoder_input = (tgt[t] if teacher_force else top_token)
+            attentions.append(attention.unsqueeze(-1))
+
+        if return_attentions:
+            return outputs, torch.cat(attentions, dim=-1)
+        else:
+            return outputs
+
+class MultipleOptimizer(object):
+    def __init__(self, *op):
+        self.optimizers = op
+        
+    def zero_grad(self):
+        for op in self.optimizers:
+            op.zero_grad()
+    
+    def step(self):
+        for op in self.optimizers:
+            op.step()
