@@ -22,8 +22,8 @@ Gerekli kütüphaneleri yükleyin
 
 ## Örnekler
 
-![App Screenshot](https://github.com/VuralBayrakli/seq2seq/ss1.jpg)
+![App Screenshot](https://github.com/VuralBayrakli/seq2seq/ss/ss1.jpg)
 
-![App Screenshot](https://github.com/VuralBayrakli/seq2seq/ss2.jpg)
+![App Screenshot](https://github.com/VuralBayrakli/seq2seq/ss/ss2.jpg)
 
-![App Screenshot](https://github.com/VuralBayrakli/seq2seq/ss3.jpg)
+![App Screenshot](https://github.com/VuralBayrakli/seq2seq/ss/ss3.jpg)
