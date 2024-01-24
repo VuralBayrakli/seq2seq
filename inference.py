@@ -101,3 +101,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+python inference.py --text "I am a student."
+"""
