@@ -29,7 +29,7 @@ Eğitilmiş modeli [buradan](https://drive.google.com/file/d/1MmNC5HQViKJnPwc3an
 
 ## Modeli kullanın
 ```bash
-    python testing.py --model <model_path> --image <image_path>
+    python inference.py --text <input text>
 ```
 
 ## Örnekler
