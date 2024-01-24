@@ -7,17 +7,29 @@ Sequence to Sequence yöntemi, özellikle doğal dil işleme ve makine çevirisi
 
 Bahdanau Mekanizması, özellikle dil çevirisi gibi uzun ve karmaşık dizilerin işlendiği Seq2Seq modellerde kullanılan bir dikkat mekanizmasıdır. Bu mekanizma, modelin çıkışını oluştururken her bir giriş elemanına ağırlıklarını dinamik olarak atamasını sağlar. Bu sayede model, özellikle uzun giriş dizileriyle daha iyi başa çıkabilir ve önemli bilgileri odaklanarak kullanabilir.
 
-## Dosya Yükleme
 
-Projeyi yükleyin
+## Projeyi yükleyin
 
 ```bash
     git clone https://github.com/VuralBayrakli/seq2seq.git
 ```
 
-Gerekli kütüphaneleri yükleyin
+## Gerekli kütüphaneleri yükleyin
 ```bash
     pip install -r requirements.txt
+```
+## Modeli indirin
+Eğitilmiş modeli [buradan](https://drive.google.com/file/d/1MmNC5HQViKJnPwc3an1dKDm0uqhLmqPO/view?usp=sharing) indirin ve projenin kök dizinine yerleştirin.
+
+
+## Gerekli kütüphaneleri yükleyin
+```bash
+    pip install -r requirements.txt
+```
+
+## Modeli kullanın
+```bash
+    python testing.py --model <model_path> --image <image_path>
 ```
 
 ## Örnekler
